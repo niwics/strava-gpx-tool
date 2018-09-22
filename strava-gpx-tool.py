@@ -9,7 +9,6 @@ from gpxpy.geo import length_3d
 import datetime
 import dateutil.parser
 import re
-from math import ceil
 from copy import deepcopy
 import os
 import sys
@@ -20,7 +19,10 @@ GARMIN_NS = 'http://www.garmin.com/xmlschemas/TrackPointExtension/v1'
 HR_BASE_TAG = '{{{}}}TrackPointExtension'.format(GARMIN_NS)
 HR_TAG = '{{{}}}hr'.format(GARMIN_NS)
 PACE_RE_PATTERN = r"(\d\d?):(\d\d)"
+# shortest distance after which the pause will be generated (when filling times)
+PAUSE_LIMIT_METERS = 200
 
+# logging setup
 log = logging.getLogger(__name__)
 ch = logging.StreamHandler()
 log.addHandler(ch)
@@ -127,6 +129,7 @@ class StravaGpxTool:
             for segment in track.segments:
                 prev_point = None
                 length_from_prev = 0
+                current_length_for_pause = 0
                 for point in segment.points:
                     duplicated_point = None
                     if prev_point:
@@ -153,12 +156,16 @@ class StravaGpxTool:
                             log.debug("Time moved to: {} (after move)".format(pace_last_time))
                             point.time = pace_last_time
                             # add the waiting time (proportionally from pause_time)
-                            next_time = pace_last_time + datetime.timedelta(
-                                seconds = round(pause_time * ((1.0*length_from_prev)/total_length)))
-                            pace_last_time = min(next_time, end_time)
-                            log.debug("Time moved to: {} (after pause)".format(pace_last_time))
-                            duplicated_point = deepcopy(point)
-                            duplicated_point.time = pace_last_time
+                            if current_length_for_pause >= PAUSE_LIMIT_METERS:
+                                next_time = pace_last_time + datetime.timedelta(
+                                    seconds = round(pause_time * ((1.0*current_length_for_pause)/total_length)))
+                                pace_last_time = min(next_time, end_time)
+                                log.debug("Time moved to: {} (after pause)".format(pace_last_time))
+                                duplicated_point = deepcopy(point)
+                                duplicated_point.time = pace_last_time
+                                current_length_for_pause = 0
+                            else:
+                                current_length_for_pause += length_from_prev
                         else:
                             point.time = pace_last_time
                     self.addPoint(point)
