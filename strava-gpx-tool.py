@@ -179,7 +179,24 @@ class StravaGpxTool:
         log.info('Total distance: {}'.format(total_length_current))
     
     def merge(self):
-        raise NotImplementedError('merge')
+        limit = self._opts.get('limit')
+
+        log.info('Merging files "{}" and "{}".'.format(self._opts['input1'], self._opts['input2']))
+
+        for filename in (self._opts['input1'], self._opts['input2']):
+
+            in_file = open(filename, 'r')
+            in_gpx = gpx_parse(in_file)
+
+            i = 0
+            for track in in_gpx.tracks:
+                for segment in track.segments:
+                    for point in segment.points:
+                        self.addPoint(point)
+                        i += 1
+                        if i == limit:
+                            log.debug('Limit of processed trackpoints ({}) reached, ending.'.format(limit))
+                            break
 
 def main():
 
