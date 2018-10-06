@@ -193,6 +193,8 @@ class StravaGpxTool:
                                 current_length_for_pause += length_from_prev
                         else:
                             point.time = pace_last_time
+                    elif not point.time:
+                        raise StravaGpxException('No pace was set, but there is no time for the point: {}'.format(point))
                     self.addPoint(point)
                     if duplicated_point:
                         self.addPoint(duplicated_point)
