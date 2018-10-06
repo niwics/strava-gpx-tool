@@ -46,8 +46,6 @@ Example of merging two files:
 python strava-gpx-tool.py merge input1.gpx input2.gpx
 ```
 
-## Author
+## About
 
-Mira Kvasnica, 2018
-
-GPX processing is based on [gpxpy library](https://github.com/tkrajina/gpxpy).
+Author: Mira Kvasnica, GPX processing is based on [gpxpy library](https://github.com/tkrajina/gpxpy).
