@@ -231,8 +231,9 @@ class StravaGpxTool:
 def main():
     """Main program entrypoint"""
     # program arguments
-    parser = argparse.ArgumentParser(description="Tool for manipulating GPX files for Strava.")
-    parser.add_argument('--output', default='out.gpx', help="Output file file")
+    parser = argparse.ArgumentParser(description="Tool for manipulating GPX files for Strava.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--output', default='out.gpx', help="Output file")
     parser.add_argument('--debug', action='store_true', help="Turn on debug mode")
     parser.add_argument('--limit', type=int, help="DEBUG argument: Limit the number of trackpoint to process")
     # program mode
