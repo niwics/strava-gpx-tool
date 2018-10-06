@@ -246,8 +246,8 @@ def main():
     fill_subpars = mode_subpars.add_parser('fill', help="Fills GPX points with missing attributes: time or heart rate")
     fill_subpars.add_argument('input', help="Input file")
     fill_subpars.add_argument('--pace', help="Average pace to set for all points with this value missing. Format: MM:SS")
-    fill_subpars.add_argument('--start-time', help="Start time for filling the pace (ISO format)")
-    fill_subpars.add_argument('--end-time', help="ENd time for filling the pace (ISO format)")
+    fill_subpars.add_argument('--start-time', help="Start time for filling the pace (ISO format, UTC)")
+    fill_subpars.add_argument('--end-time', help="End time for filling the pace (ISO format, UTC)")
     fill_subpars.add_argument('--hr', type=int, help="Heart rate to set for all points with this value missing")
     fill_subpars.add_argument('--soft', action='store_true', help="Soft mode - it fills just missig values and ignores existing")
 
