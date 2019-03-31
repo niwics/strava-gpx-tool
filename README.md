@@ -38,12 +38,12 @@ python strava-gpx-tool.py fill input.gpx --hr 144
 
 ### Merging GPX files
 
-This mode reads two GPX files and simply concatenates the *file1* and *file2* to the output. It preserves all waypoint informations.
+This mode reads GPX files from the directory and simply concatenates them to the output. It preserves all waypoint informations. All files from the input directory are merged in order of their names (lexicographically).
 
-Example of merging two files:
+Example of merging two files `input-dir/1.gpx` and `input-dir/second.gpx`:
 
 ```bash
-python strava-gpx-tool.py merge input1.gpx input2.gpx
+python strava-gpx-tool.py merge input-dir
 ```
 
 ## About

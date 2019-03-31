@@ -210,12 +210,23 @@ class StravaGpxTool:
         Adds all points from the both input files.
         """
         limit = self._opts.get('limit')
+        if not os.path.isdir(self._opts['input-dir']):
+            raise StravaGpxException("Path \"{}\" is not valid directory for input files."
+                .format(self._opts['input-dir']))
+        input_files = []
+        try:
+            input_files = [f for f in os.listdir(self._opts['input-dir'])
+                if os.path.isfile(os.path.join(self._opts['input-dir'], f))]
+        except OSError as e:
+            raise StravaGpxException("Could not read files from input files directory \"{}\"."
+                .format(self._opts['input-dir']))
+        input_files.sort()
+        log.info("Merging files from \"{}\" directory: {}."
+            .format(self._opts['input-dir'], ", ".join(input_files)))
 
-        log.info("Merging files \"{}\" and \"{}\".".format(self._opts['input1'], self._opts['input2']))
+        for filename in input_files:
 
-        for filename in (self._opts['input1'], self._opts['input2']):
-
-            in_file = open(filename, 'r')
+            in_file = open(os.path.join(self._opts['input-dir'], filename), 'r')
             in_gpx = gpx_parse(in_file)
 
             i = 0
@@ -241,8 +252,7 @@ def main():
     mode_subpars.required = True
     # subparsers args
     merge_subpar = mode_subpars.add_parser('merge', help="Starts %(prog)s daemon")
-    merge_subpar.add_argument('input1', help="Input file 1")
-    merge_subpar.add_argument('input2', help="Input file 2")
+    merge_subpar.add_argument('input-dir', help="Path to directory with input files")
     fill_subpars = mode_subpars.add_parser('fill', help="Fills GPX points with missing attributes: time or heart rate")
     fill_subpars.add_argument('input', help="Input file")
     fill_subpars.add_argument('--pace', help="Average pace to set for all points with this value missing. Format: MM:SS")
