@@ -59,8 +59,10 @@ class StravaGpxTool:
         """
         self._opts = opts
         self._out_segment = None
+        self._time_hr_array = []
+        self._time_hr_search_offset = 0
     
-    def addPoint(self, point):
+    def add_point(self, point):
         """Adds the GPX point for the output file.
         
         :param point: Point to add
@@ -69,6 +71,16 @@ class StravaGpxTool:
         if not self._out_segment:
             raise StravaGpxException("Could not add point. No output segment defined.")
         self._out_segment.points.append(point)
+    
+    def get_hr_for_time(self, search_time, default_hr):
+        last_hr_value = default_hr
+        if len(self._time_hr_array) and self._time_hr_search_offset < len(self._time_hr_array):
+            if search_time < self._time_hr_array[self._time_hr_search_offset][0]:
+                return last_hr_value
+            while search_time >= self._time_hr_array[self._time_hr_search_offset][0]:
+                last_hr_value = self._time_hr_array[self._time_hr_search_offset][1]
+                self._time_hr_search_offset += 1
+        return last_hr_value
     
     def process(self):
         """Processes the action based on selected mode.
@@ -140,6 +152,19 @@ class StravaGpxTool:
         pace_last_time = start_time
         moving_time = None
 
+        # read and store HR input file
+        if self._opts['hr_file']:
+            hr_file = open(self._opts['hr_file'], 'r')
+            hr_gpx = gpx_parse(hr_file)
+            for track in hr_gpx.tracks:
+                for segment in track.segments:
+                    for point in segment.points:
+                        if point.extensions:
+                            for extension_record in point.extensions:
+                                if extension_record[0].text:
+                                    self._time_hr_array.append((point.time, extension_record[0].text))
+            print("Stored {} point(s) with HR information from the file {}.".format(len(self._time_hr_array), self._opts['hr_file']))
+
         # compute variables based on overall distance
         if pace:
             total_length = StravaGpxTool.compute_tracks_length(in_gpx.tracks)
@@ -160,17 +185,6 @@ class StravaGpxTool:
                     if prev_point:
                         length_from_prev = geo.length_3d((prev_point, point))
                         total_length_current += length_from_prev
-                    if hr:
-                        if point.extensions and not soft_mode:
-                            raise StravaGpxException("Existing *extension* value found."+
-                            "Consider running with --soft parameter. Value found: {}".
-                            format(point.extensions))
-                        extension_element = ElementTree.Element(HR_BASE_TAG)
-                        extension_element.text = ""
-                        hr_element = ElementTree.Element(HR_TAG)
-                        hr_element.text = str(hr)
-                        extension_element.append(hr_element)
-                        point.extensions.append(extension_element)
                     if pace:
                         log.debug("  DISTANCE: {}".format(length_from_prev))
                         if length_from_prev > 0:
@@ -195,9 +209,22 @@ class StravaGpxTool:
                             point.time = pace_last_time
                     elif not point.time:
                         raise StravaGpxException('No pace was set, but there is no time for the point: {}'.format(point))
-                    self.addPoint(point)
+                    
+                    if hr:
+                        if point.extensions and not soft_mode:
+                            raise StravaGpxException("Existing *extension* value found."+
+                            "Consider running with --soft parameter. Value found: {}".
+                            format(point.extensions))
+                        extension_element = ElementTree.Element(HR_BASE_TAG)
+                        extension_element.text = ""
+                        hr_element = ElementTree.Element(HR_TAG)
+                        hr_element.text = str(self.get_hr_for_time(point.time, hr))
+                        extension_element.append(hr_element)
+                        point.extensions.append(extension_element)
+                    
+                    self.add_point(point)
                     if duplicated_point:
-                        self.addPoint(duplicated_point)
+                        self.add_point(duplicated_point)
                     prev_point = point
                     i += 1
                     if i == limit:
@@ -227,13 +254,17 @@ class StravaGpxTool:
         for filename in input_files:
 
             in_file = open(os.path.join(self._opts['input-dir'], filename), 'r')
-            in_gpx = gpx_parse(in_file)
+            try:
+                in_gpx = gpx_parse(in_file)
+            except gpx.GPXXMLSyntaxException as e:
+                log.error("Error while parsing file " + filename)
+                raise e
 
             i = 0
             for track in in_gpx.tracks:
                 for segment in track.segments:
                     for point in segment.points:
-                        self.addPoint(point)
+                        self.add_point(point)
                         i += 1
                         if i == limit:
                             log.debug("Limit of processed trackpoints ({}) reached, ending.".format(limit))
@@ -259,6 +290,7 @@ def main():
     fill_subpars.add_argument('--start-time', help="Start time for filling the pace (ISO format, UTC)")
     fill_subpars.add_argument('--end-time', help="End time for filling the pace (ISO format, UTC)")
     fill_subpars.add_argument('--hr', type=int, help="Heart rate to set for all points with this value missing")
+    fill_subpars.add_argument('--hr-file', help="File containing heart rate values - they will be added to the input file (based on the time) for all points with this value missing")
     fill_subpars.add_argument('--soft', action='store_true', help="Soft mode - it fills just missig values and ignores existing")
 
     opts = vars(parser.parse_args())
