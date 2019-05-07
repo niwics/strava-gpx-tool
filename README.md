@@ -28,12 +28,19 @@ Example of filling time values:
 python strava-gpx-tool.py fill input.gpx --pace 4:44 --start-time "2018-09-15 17:53:10" --end-time "2018-09-15 19:39:50"
 ```
 
-Filling the heart rate is similar to filling time and they could be combined. This tool simply adds the defined heart rate to each waypoint.
+Filling the **heart rate** is similar to filling time and they could be combined. This tool simply adds the defined heart rate to each waypoint.
 
-Example of filling just heart rate:
+Example of **filling just heart rate**:
 
 ```bash
 python strava-gpx-tool.py fill input.gpx --hr 144
+```
+
+More sophisticated option is to include the input file from which script loads heart rates based on the timestamp. This is useful when you lost the GPS signal on your route, so you have the wrong position, but correct heart rate. You can combine this option with default `--hr` switch, which will be used for waypoints without HR and without corresponding time from HR file.
+
+Example of **filling heart rate based on input file combined with default HR**:
+```bash
+python strava-gpx-tool.py fill input.gpx --hr-file input-hr-file.gpx --hr 144
 ```
 
 ### Merging GPX files
