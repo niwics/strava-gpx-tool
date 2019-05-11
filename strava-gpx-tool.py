@@ -78,6 +78,8 @@ class StravaGpxTool:
             if search_time < self._time_hr_array[self._time_hr_search_offset][0]:
                 return last_hr_value
             while search_time >= self._time_hr_array[self._time_hr_search_offset][0]:
+                if self._time_hr_search_offset == len(self._time_hr_array):
+                    raise StravaGpxException("No corresponding datetime found in HR file.")
                 last_hr_value = self._time_hr_array[self._time_hr_search_offset][1]
                 self._time_hr_search_offset += 1
         return last_hr_value
@@ -140,6 +142,8 @@ class StravaGpxTool:
                 end_time = dateutil.parser.parse(self._opts.get('end_time'))
             except ValueError as e:
                 raise StravaGpxException("Invalid \"end_time\" parameter: {}".format(self._opts.get('end_time')))
+            if self._opts['start_time'] >= self._opts['end_time']:
+                raise StravaGpxException("End date is not higher than start date.")
             duration_total = (end_time - start_time).total_seconds()
             speed_ms = 1000.0 / (int(pace_re.group(1))*60+int(pace_re.group(2)))
 
