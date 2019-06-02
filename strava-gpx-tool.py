@@ -18,6 +18,7 @@ GARMIN_NS = 'http://www.garmin.com/xmlschemas/TrackPointExtension/v1'
 HR_BASE_TAG = "{{{}}}TrackPointExtension".format(GARMIN_NS)
 HR_TAG = "{{{}}}hr".format(GARMIN_NS)
 PACE_RE_PATTERN = r'(\d\d?):(\d\d)'
+FIX_TIME_PATTERN = r'((\d?\d):)?(\d?\d):(\d\d)'
 # shortest distance after which the pause will be generated (when filling times)
 PAUSE_LIMIT_METERS = 200
 
@@ -29,27 +30,126 @@ log.addHandler(ch)
 class StravaGpxException(Exception):
     pass
 
+class PointsBoundaries:
+    # TODO start/end attrs could have int or datetime values now => separate
+    def __init__(self, start, end):
+        if not start and not end:
+            raise ValueError('One of start or end values must be set')
+        if start > end and start and end:   # just in case both are set
+            raise ValueError('End value must be higher than start value')
+        self.start = start
+        self.end = end
+    
+    @property
+    def start(self):
+        return self.__start
+    
+    @property
+    def end(self):
+        return self.__end
+    
+    def __str__(self):
+        return '({},{})'.format(self.start, self.end)
+
 class StravaGpxTool:
     """Main processing class."""
+
+    @staticmethod
+    def parse_pace(pace):
+        pace_re = re.search(PACE_RE_PATTERN, pace)
+        if not pace_re:
+            raise StravaGpxException("Invalid format of pace: {}. Should be in format MM:SS.".format(pace))
+        return pace
     
     @staticmethod
-    def compute_tracks_length(tracks):
-        """Computes the total distance of the tracks.
+    def compute_path_length(points):
+        """Computes the total distance of path points.
         
-        :param tracks: List of GPX tracks
-        :type tracks: [gpxpy.gpx.GPXTrack]
-        :returns: Track length in meters
+        :param points: List of GPX tracks
+        :type points: [gpxpy.gpx.GPXPoint]
+        :returns: Path length in meters
         :rtype: float
         """
         length = 0
-        for track in tracks:
-            for segment in track.segments:
-                prev_point = None
-                for point in segment.points:
-                    if prev_point:
-                        length += geo.length_3d((prev_point, point))
-                    prev_point = point
+        prev_point = None
+        for point in points:
+            if prev_point:
+                length += geo.length_3d((prev_point, point))
+            prev_point = point
         return length
+    
+    @staticmethod
+    def get_points_from_file(filename):
+        try:
+            in_file = open(filename, 'r')
+        except IOError as e:
+            raise StravaGpxException("Could not open file {}: {}".format(filename, e))
+        try:
+            in_gpx = gpx_parse(in_file)
+        except gpx.GPXXMLSyntaxException as e:
+            raise StravaGpxException("Error while parsing file {}: {}".format(filename, e))
+        return StravaGpxTool.extract_points(in_gpx.tracks)
+    
+    @staticmethod
+    def extract_points(tracks):
+        if len(tracks) == 0:
+            raise StravaGpxException('No GPX tracks found in the input file')
+        elif len(tracks) > 1:
+            raise StravaGpxException('Multiple GPX tracks in the input file are not supported')
+        
+        if len(tracks[0].segments) == 0:
+            raise StravaGpxException('No GPX segments found in the input file')
+        elif len(tracks[0].segments) > 1:
+            raise StravaGpxException('Multiple GPX segments in the input file are not supported')
+        
+        return tracks[0].segments[0].points
+    
+    @staticmethod
+    def get_first_point_datetime(points):
+        if not points:
+            raise StravaGpxException('No path points found while processing')
+        return points[0].time
+    
+    
+    @staticmethod
+    def get_point_at_distance(points, distance_to_find):
+        assert points, 'Points must be non-empty'
+        total_distance = 0
+        prev_point = None
+        for point in points:
+            total_distance += geo.length_3d((prev_point, point))
+            if total_distance >= distance_to_find:
+                return point
+            prev_point = point
+        raise StravaGpxException('The input distance {} is higher than path length {}!'.format(
+            distance_to_find, total_distance
+        ))
+
+    
+    @staticmethod
+    def get_point_at_time(points, time_to_find):
+        for point in points:
+            if time_to_find <= point.time:
+                return point
+        raise StravaGpxException('Point at given time {} was not found in the path.'.format(time_to_find))
+    
+    @staticmethod
+    def get_time_at_index(points, index):
+        return points[index].time
+    
+    @staticmethod
+    def get_closest_point_index(points, point_to_find):
+        assert points, 'Points must be non-empty'
+        best_index = 0
+        best_distance = sys.maxsize
+        i = 0
+        for point in points:
+            distance_to = geo.length_3d((point_to_find, point))
+            if distance_to < best_distance:
+                best_distance = distance_to
+                best_index = i
+            i += 1
+        return best_index
 
     def __init__(self, opts):
         """Class constructor.
@@ -71,6 +171,118 @@ class StravaGpxTool:
         if not self._out_segment:
             raise StravaGpxException("Could not add point. No output segment defined.")
         self._out_segment.points.append(point)
+    
+    def add_points(self, points, hr = None, hr_points = None, pace = None,
+            fill_time = None, crop_time = None, crop_index = None):
+
+        in_points_counter = out_points_counter = total_distance = 0
+        prev_point = None
+        length_from_prev = 0
+        current_length_for_pause = 0
+        pace_last_time = None
+
+        if crop_index:
+            log.debug('Cropping points to indexes: {}'.format(crop_index))
+        cropped_points = points[crop_index.start:crop_index.end] if crop_index else points
+
+        if pace:
+            assert fill_time, 'When setting the pace, both start and end dates must be set'
+            assert fill_time.start < fill_time.end, 'End date to set must be higher than start date'
+            duration_total = (fill_time.end - fill_time.start).total_seconds()
+            pace_re = re.search(PACE_RE_PATTERN, pace)
+            assert pace_re, 'Invalid pace format'
+            speed_mps = 1000.0 / (int(pace_re.group(1))*60+int(pace_re.group(2)))
+            pace_last_time = fill_time.start
+
+        total_length = 0
+        moving_time = None
+
+        # read and store HR input file
+        if hr_points:
+            for point in hr_points:
+                if point.extensions:
+                    for extension_record in point.extensions:
+                        if extension_record[0].text:
+                            self._time_hr_array.append((point.time, extension_record[0].text))
+            print("Stored {} point(s) with HR information from the HR file.".format(len(self._time_hr_array)))
+
+        # compute variables based on overall distance
+        if pace:
+            total_length = StravaGpxTool.compute_path_length(cropped_points)
+            moving_time = total_length / speed_mps
+            pause_time = duration_total - moving_time
+            log.info("Filling the pace: moving time: {:.0f} seconds, speed: {:.2f} m/s (= {:.2f} km/h), distance: {:.0f} m"
+                .format(moving_time, speed_mps, speed_mps*3.6, total_length))
+
+        log.debug("Started at time: {}".format(pace_last_time))
+        for point in cropped_points:
+            if crop_time:
+                if crop_time.start and point.time < crop_time.start:
+                    continue
+                if crop_time.end and point.time >= crop_time.end:
+                    break
+            if in_points_counter == self._opts.get('limit'):
+                log.debug("Limit of processed trackpoints ({}) reached, ending.".format(self._opts.get('limit')))
+                break
+            
+            duplicated_point = None
+            hr_info = ""
+            current_speed_ms = 0
+            if prev_point:
+                length_from_prev = geo.length_3d((prev_point, point))
+            if pace:
+                if length_from_prev > 0:
+                    # compute the arrival time to this point
+                    next_time = pace_last_time + datetime.timedelta(
+                        seconds = round(length_from_prev / speed_mps))
+                    pace_last_time = min(next_time, fill_time.end)
+                    point.time = pace_last_time
+                    # add the waiting time (proportionally from pause_time) to new duplicated point
+                    if current_length_for_pause >= PAUSE_LIMIT_METERS:
+                        next_time = pace_last_time + datetime.timedelta(
+                            seconds = round(pause_time * ((1.0*current_length_for_pause)/total_length)))
+                        pace_last_time = min(next_time, fill_time.end)
+                        duplicated_point = deepcopy(point)
+                        duplicated_point.time = pace_last_time
+                        current_length_for_pause = 0
+                    else:
+                        current_length_for_pause += length_from_prev
+                else:
+                    point.time = pace_last_time
+            elif not point.time:
+                raise StravaGpxException('No pace was set, but there is no time for the point: {}'.format(point))
+
+            if hr:
+                if point.extensions and not self._opts.get('soft'):
+                    raise StravaGpxException("Existing *extension* value found."+
+                    "Consider running with --soft parameter. Value found: {}".
+                    format(point.extensions))
+                extension_element = ElementTree.Element(HR_BASE_TAG)
+                extension_element.text = ""
+                hr_element = ElementTree.Element(HR_TAG)
+                hr_value = str(self.get_hr_for_time(point.time, hr))
+                hr_element.text = hr_value
+                extension_element.append(hr_element)
+                point.extensions.append(extension_element)
+                hr_info = ", HR: {}".format(hr_value)
+            
+            total_distance += length_from_prev
+            self.add_point(point)
+            if prev_point:
+                current_speed_ms = (length_from_prev / (point.time - prev_point.time).seconds)
+            log.debug("Added point at time: {}, current total distance: {:.2f} m, from previous: {:.2f} m, current speed {:.2f} km/h{}"
+                .format(point.time, total_distance, length_from_prev, current_speed_ms*3.6, hr_info))
+            if duplicated_point:
+                log.debug(">> Added duplicated (stop) point at time {}".format(duplicated_point.time))
+                self.add_point(duplicated_point)
+                out_points_counter += 1
+                prev_point = duplicated_point
+            else:
+                prev_point = point
+            in_points_counter += 1
+            out_points_counter += 1
+        
+        return (out_points_counter, total_distance)
     
     def get_hr_for_time(self, search_time, default_hr):
         last_hr_value = default_hr
@@ -99,6 +311,10 @@ class StravaGpxTool:
             self.fill()
         elif self._opts['mode'] == 'merge':
             self.merge()
+        elif self._opts['mode'] == 'fix':
+            self.fix()
+        elif self._opts['mode'] == 'crop':
+            self.crop()
         else:
             raise StravaGpxException("Invalid processing mode")
         
@@ -109,7 +325,7 @@ class StravaGpxTool:
             with open(self._opts['output'], 'w') as stream:
                 stream.write(out_gpx.to_xml())
         except IOError as e:
-            raise StravaGpxException("Error while wtiting the output XML to file: {}".
+            raise StravaGpxException("Error while writing the output XML to file: {}".
                 format(self._opts['output']))
         log.info("Output GPX file written to \"{}\"".format(self._opts['output']))
     
@@ -117,22 +333,19 @@ class StravaGpxTool:
         """Performs the fill mode processing.
         Adds time and/or heart rate values.
         """
-        in_file_name = self._opts['input']
-        pace = self._opts.get('pace')
-        start_time = end_time = duration_total = speed_ms = None
+        pace = StravaGpxTool.parse_pace(self._opts.get('pace')) if self._opts.get('pace') else None
         hr = self._opts.get('hr')
-        soft_mode = self._opts.get('soft')
-        limit = self._opts.get('limit')
+        hr_points = None
+        fill_time = start_time = end_time = duration_total = None
 
         # validations and variables settings
         if not pace and not hr:
-            raise StravaGpxException("ERROR: Nothing tho set (no HR or pace specified in program parameters)")
+            raise StravaGpxException("ERROR: Nothing th set (no HR or pace specified in program parameters)")
         if pace:
-            pace_re = re.search(PACE_RE_PATTERN, pace)
-            if not pace_re:
-                raise StravaGpxException("Invalid format of pace: {}. Should be in format MM:SS.".format(pace))
-            if not self._opts['start_time'] or not self._opts['end_time']:
+            if not self._opts.get('start_time') or not self._opts.get('end_time'):
                 raise StravaGpxException("\"start-time\" and \"end-time\" arguments must be set for filling the pace.")
+            if self._opts.get('start_time') >= self._opts.get('end_time'):
+                raise StravaGpxException("End date to set is not higher than start date.")
             # process start and end dates
             try:
                 start_time = dateutil.parser.parse(self._opts.get('start_time'))
@@ -142,99 +355,17 @@ class StravaGpxTool:
                 end_time = dateutil.parser.parse(self._opts.get('end_time'))
             except ValueError as e:
                 raise StravaGpxException("Invalid \"end_time\" parameter: {}".format(self._opts.get('end_time')))
-            if self._opts['start_time'] >= self._opts['end_time']:
-                raise StravaGpxException("End date is not higher than start date.")
-            duration_total = (end_time - start_time).total_seconds()
-            speed_ms = 1000.0 / (int(pace_re.group(1))*60+int(pace_re.group(2)))
+            fill_time = PointsBoundaries(start_time, end_time)
 
-        # open input file
-        in_file = open(in_file_name, 'r')
-        in_gpx = gpx_parse(in_file)
-
-        total_length = 0
-        total_length_current = 0
-        pace_last_time = start_time
-        moving_time = None
-
-        # read and store HR input file
+        # read input files
+        in_points = StravaGpxTool.get_points_from_file(self._opts['input'])
+        # HR input file
         if self._opts['hr_file']:
-            hr_file = open(self._opts['hr_file'], 'r')
-            hr_gpx = gpx_parse(hr_file)
-            for track in hr_gpx.tracks:
-                for segment in track.segments:
-                    for point in segment.points:
-                        if point.extensions:
-                            for extension_record in point.extensions:
-                                if extension_record[0].text:
-                                    self._time_hr_array.append((point.time, extension_record[0].text))
-            print("Stored {} point(s) with HR information from the file {}.".format(len(self._time_hr_array), self._opts['hr_file']))
-
-        # compute variables based on overall distance
-        if pace:
-            total_length = StravaGpxTool.compute_tracks_length(in_gpx.tracks)
-            moving_time = total_length / speed_ms
-            pause_time = duration_total - moving_time
-
-        log.info("Moving time: {}, speed (m/s): {}, total dist: {}".format(moving_time, speed_ms, total_length))
+            hr_points = StravaGpxTool.get_points_from_file(self._opts['hr_file'])
 
         # process all points from input file
-        i = 0
-        for track in in_gpx.tracks:
-            for segment in track.segments:
-                prev_point = None
-                length_from_prev = 0
-                current_length_for_pause = 0
-                for point in segment.points:
-                    duplicated_point = None
-                    if prev_point:
-                        length_from_prev = geo.length_3d((prev_point, point))
-                        total_length_current += length_from_prev
-                    if pace:
-                        log.debug("  DISTANCE: {}".format(length_from_prev))
-                        if length_from_prev > 0:
-                            # compute the arrival time to this point
-                            next_time = pace_last_time + datetime.timedelta(
-                                seconds = round(length_from_prev / speed_ms))
-                            pace_last_time = min(next_time, end_time)
-                            log.debug("Time moved to: {} (after move)".format(pace_last_time))
-                            point.time = pace_last_time
-                            # add the waiting time (proportionally from pause_time) to new duplicated point
-                            if current_length_for_pause >= PAUSE_LIMIT_METERS:
-                                next_time = pace_last_time + datetime.timedelta(
-                                    seconds = round(pause_time * ((1.0*current_length_for_pause)/total_length)))
-                                pace_last_time = min(next_time, end_time)
-                                log.debug("Time moved to: {} (after pause)".format(pace_last_time))
-                                duplicated_point = deepcopy(point)
-                                duplicated_point.time = pace_last_time
-                                current_length_for_pause = 0
-                            else:
-                                current_length_for_pause += length_from_prev
-                        else:
-                            point.time = pace_last_time
-                    elif not point.time:
-                        raise StravaGpxException('No pace was set, but there is no time for the point: {}'.format(point))
-                    
-                    if hr:
-                        if point.extensions and not soft_mode:
-                            raise StravaGpxException("Existing *extension* value found."+
-                            "Consider running with --soft parameter. Value found: {}".
-                            format(point.extensions))
-                        extension_element = ElementTree.Element(HR_BASE_TAG)
-                        extension_element.text = ""
-                        hr_element = ElementTree.Element(HR_TAG)
-                        hr_element.text = str(self.get_hr_for_time(point.time, hr))
-                        extension_element.append(hr_element)
-                        point.extensions.append(extension_element)
-                    
-                    self.add_point(point)
-                    if duplicated_point:
-                        self.add_point(duplicated_point)
-                    prev_point = point
-                    i += 1
-                    if i == limit:
-                        log.debug("Limit of processed trackpoints ({}) reached, ending.".format(limit))
-                        break
-        log.info("Total distance: {}".format(total_length_current))
+        metrics = self.add_points(in_points, hr, hr_points, pace, fill_time)
+        log.info("Total distance: {}".format(metrics[1]))
     
     def merge(self):
         """Performs the merge mode processing.
@@ -257,22 +388,51 @@ class StravaGpxTool:
 
         for filename in input_files:
 
-            in_file = open(os.path.join(self._opts['input-dir'], filename), 'r')
-            try:
-                in_gpx = gpx_parse(in_file)
-            except gpx.GPXXMLSyntaxException as e:
-                log.error("Error while parsing file " + filename)
-                raise e
+            in_points = StravaGpxTool.get_points_from_file(os.path.join(self._opts['input-dir'], filename))
 
             i = 0
-            for track in in_gpx.tracks:
-                for segment in track.segments:
-                    for point in segment.points:
-                        self.add_point(point)
-                        i += 1
-                        if i == limit:
-                            log.debug("Limit of processed trackpoints ({}) reached, ending.".format(limit))
-                            break
+            for point in in_points:
+                self.add_point(point)
+                i += 1
+                if i == limit:
+                    log.debug("Limit of processed trackpoints ({}) reached, ending.".format(limit))
+                    break
+    
+    def fix(self):
+
+        start_distance = int(1000*(self._opts['start-distance']))# km => m
+        end_distance = int(1000*(self._opts['end-distance']))    # km => m
+        pace = StravaGpxTool.parse_pace(self._opts.get('pace'))
+
+        # read input files
+        in_points = StravaGpxTool.get_points_from_file(self._opts['input'])
+        correction_points = StravaGpxTool.get_points_from_file(self._opts['correction-file'])
+
+        # get indicies of points in correction file
+        def get_fix_indexes(distance):
+            dst_point = StravaGpxTool.get_point_at_distance(in_points, distance)
+            return (
+                StravaGpxTool.get_closest_point_index(in_points, dst_point),
+                StravaGpxTool.get_closest_point_index(correction_points, dst_point)
+            )
+        in_start_index, fix_start_index = get_fix_indexes(start_distance)
+        in_end_index, fix_end_index = get_fix_indexes(end_distance)
+        fill_time_boundaries = PointsBoundaries(
+            StravaGpxTool.get_time_at_index(in_points, in_start_index),
+            StravaGpxTool.get_time_at_index(in_points, in_end_index))
+        # correction in corrected indexes to smooth the path - use the next points
+        fix_start_index += 1
+        fix_end_index -= 1
+        
+        # add point from input file from begining to the first fixed point
+        metrics = self.add_points(in_points, crop_index=PointsBoundaries(None, in_start_index))
+        log.info('Part before fix to distance {} m: added {} points with distance {:.0f} m.'.format(start_distance, metrics[0], metrics[1]))
+        metrics = self.add_points(correction_points, hr=0, hr_points=in_points,
+            pace=pace, fill_time=fill_time_boundaries,
+            crop_index=PointsBoundaries(fix_start_index, fix_end_index))
+        log.info('Fixed part: added {} points with distance {:.0f} m to the time between {} and {}'.format(metrics[0], metrics[1], fill_time_boundaries.start, fill_time_boundaries.end))
+        metrics = self.add_points(in_points, crop_index=PointsBoundaries(in_end_index, None))
+        log.info('Part after fix from time {}: added {} points with distance {:.0f} m.'.format(end_distance, metrics[0], metrics[1]))
 
 def main():
     """Main program entrypoint"""
@@ -286,16 +446,22 @@ def main():
     mode_subpars = parser.add_subparsers(dest='mode')
     mode_subpars.required = True
     # subparsers args
-    merge_subpar = mode_subpars.add_parser('merge', help="Starts %(prog)s daemon")
+    merge_subpar = mode_subpars.add_parser('merge', help="Merges GPX files from the input directory")
     merge_subpar.add_argument('input-dir', help="Path to directory with input files")
     fill_subpars = mode_subpars.add_parser('fill', help="Fills GPX points with missing attributes: time or heart rate")
-    fill_subpars.add_argument('input', help="Input file")
+    fill_subpars.add_argument('input', help="Input GPX file")
     fill_subpars.add_argument('--pace', help="Average pace to set for all points with this value missing. Format: MM:SS")
     fill_subpars.add_argument('--start-time', help="Start time for filling the pace (ISO format, UTC)")
     fill_subpars.add_argument('--end-time', help="End time for filling the pace (ISO format, UTC)")
     fill_subpars.add_argument('--hr', type=int, help="Heart rate to set for all points with this value missing")
     fill_subpars.add_argument('--hr-file', help="File containing heart rate values - they will be added to the input file (based on the time) for all points with this value missing")
     fill_subpars.add_argument('--soft', action='store_true', help="Soft mode - it fills just missig values and ignores existing")
+    fix_subpar = mode_subpars.add_parser('fix', help="Fix corrupted path in GPX file")
+    fix_subpar.add_argument('input', help="Input GPX file")
+    fix_subpar.add_argument('correction-file', help="GPX file with corrected path segment")
+    fix_subpar.add_argument('start-distance', type=float, help="Start distance from the begining for correction in meters")
+    fix_subpar.add_argument('end-distance', type=float, help="End distance from the begining for correction in meters")
+    fix_subpar.add_argument('pace', help="Average pace to set for all points with this value missing. Format: MM:SS")
 
     opts = vars(parser.parse_args())
 
