@@ -161,6 +161,7 @@ class StravaGpxTool:
         self._out_segment = None
         self._time_hr_array = []
         self._time_hr_search_offset = 0
+        self.last_hr_value = 0
     
     def add_point(self, point):
         """Adds the GPX point for the output file.
@@ -252,7 +253,7 @@ class StravaGpxTool:
             elif not point.time:
                 raise StravaGpxException('No pace was set, but there is no time for the point: {}'.format(point))
 
-            if hr:
+            if hr is not None:
                 if point.extensions and not self._opts.get('soft'):
                     raise StravaGpxException("Existing *extension* value found."+
                     "Consider running with --soft parameter. Value found: {}".
@@ -285,16 +286,16 @@ class StravaGpxTool:
         return (out_points_counter, total_distance)
     
     def get_hr_for_time(self, search_time, default_hr):
-        last_hr_value = default_hr
+        last_hr_value = self.last_hr_value if self.last_hr_value else default_hr
         if len(self._time_hr_array) and self._time_hr_search_offset < len(self._time_hr_array):
             if search_time < self._time_hr_array[self._time_hr_search_offset][0]:
                 return last_hr_value
             while search_time >= self._time_hr_array[self._time_hr_search_offset][0]:
                 if self._time_hr_search_offset == len(self._time_hr_array):
                     raise StravaGpxException("No corresponding datetime found in HR file.")
-                last_hr_value = self._time_hr_array[self._time_hr_search_offset][1]
+                self.last_hr_value = self._time_hr_array[self._time_hr_search_offset][1]
                 self._time_hr_search_offset += 1
-        return last_hr_value
+        return self.last_hr_value
     
     def process(self):
         """Processes the action based on selected mode.
