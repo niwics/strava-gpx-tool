@@ -21,6 +21,8 @@ PACE_RE_PATTERN = r'(\d\d?):(\d\d)'
 FIX_TIME_PATTERN = r'((\d?\d):)?(\d?\d):(\d\d)'
 # shortest distance after which the pause will be generated (when filling times)
 PAUSE_LIMIT_METERS = 200
+# max allowed distance (in meters) between two points
+MAX_POINT_DISTANCE = 20
 
 # logging setup
 log = logging.getLogger(__name__)
@@ -173,11 +175,36 @@ class StravaGpxTool:
             raise StravaGpxException("Could not add point. No output segment defined.")
         self._out_segment.points.append(point)
     
+    def get_last_point(self):
+        return self._out_segment.points[-1] if self._out_segment.points else None
+    
+    def dense_points(self, original_points, prev_point_param, next_point):
+        points = []
+        prev_point = prev_point_param
+        for point in original_points:
+            if prev_point:
+                length_from_prev = geo.length_3d((prev_point, point))
+            if length_from_prev > MAX_POINT_DISTANCE:
+                log.debug(length_from_prev)
+                num_points_to_add = int(length_from_prev/MAX_POINT_DISTANCE)
+                lat_step_distance = (point.latitude - prev_point.latitude)/(num_points_to_add+1)
+                lon_step_distance = (point.longitude - prev_point.longitude)/(num_points_to_add+1)
+                for i in range(num_points_to_add):
+                    new_point = deepcopy(point)
+                    new_point.latitude = prev_point.latitude + (i+1)*lat_step_distance
+                    new_point.longitude = prev_point.longitude + (i+1)*lon_step_distance
+                    points.append(new_point)
+            points.append(point)
+            prev_point = point
+        return points
+    
     def add_points(self, points, hr = None, hr_points = None, pace = None,
-            fill_time = None, crop_time = None, crop_index = None):
+            fill_time = None, end_next_point=None,
+            crop_time = None, crop_index = None,
+            next_point = None):
 
         in_points_counter = out_points_counter = total_distance = 0
-        prev_point = None
+        prev_point = self.get_last_point()
         length_from_prev = 0
         current_length_for_pause = 0
         pace_last_time = None
@@ -185,6 +212,8 @@ class StravaGpxTool:
         if crop_index:
             log.debug('Cropping points to indexes: {}'.format(crop_index))
         cropped_points = points[crop_index.start:crop_index.end] if crop_index else points
+        if end_next_point:
+            cropped_points.append(deepcopy(end_next_point))
 
         if pace:
             assert fill_time, 'When setting the pace, both start and end dates must be set'
@@ -196,6 +225,7 @@ class StravaGpxTool:
             pace_last_time = fill_time.start
 
         total_length = 0
+        elapsed_pause_time = 0
         moving_time = None
 
         # read and store HR input file
@@ -212,11 +242,15 @@ class StravaGpxTool:
             total_length = StravaGpxTool.compute_path_length(cropped_points)
             moving_time = total_length / speed_mps
             pause_time = duration_total - moving_time
-            log.info("Filling the pace: moving time: {:.0f} seconds, speed: {:.2f} m/s (= {:.2f} km/h), distance: {:.0f} m"
-                .format(moving_time, speed_mps, speed_mps*3.6, total_length))
+            log.info("Filling the pace: moving time: {:.0f} seconds, pause time: {:.0f} seconds, speed: {:.2f} m/s (= {:.2f} km/h = pace {}), distance: {:.0f} m"
+                .format(moving_time, pause_time, speed_mps, speed_mps*3.6, pace, total_length))
+        
+        dense_points = cropped_points
+        if pace:
+            dense_points = self.dense_points(cropped_points, prev_point, next_point)
 
         log.debug("Started at time: {}".format(pace_last_time))
-        for point in cropped_points:
+        for point in dense_points:
             if crop_time:
                 if crop_time.start and point.time < crop_time.start:
                     continue
@@ -240,9 +274,12 @@ class StravaGpxTool:
                     point.time = pace_last_time
                     # add the waiting time (proportionally from pause_time) to new duplicated point
                     if current_length_for_pause >= PAUSE_LIMIT_METERS:
-                        next_time = pace_last_time + datetime.timedelta(
-                            seconds = round(pause_time * ((1.0*current_length_for_pause)/total_length)))
+                        pause_seconds = round(pause_time * ((1.0*current_length_for_pause)/total_length))
+                        next_time = pace_last_time + datetime.timedelta(seconds = pause_seconds)
                         pace_last_time = min(next_time, fill_time.end)
+                        elapsed_pause_time += pause_seconds
+                        log.debug('Setting waiting time: {}s. Total pause time: {}s, already set: {}s'
+                            .format(pause_seconds, pause_time, elapsed_pause_time))
                         duplicated_point = deepcopy(point)
                         duplicated_point.time = pace_last_time
                         current_length_for_pause = 0
@@ -269,9 +306,9 @@ class StravaGpxTool:
             
             total_distance += length_from_prev
             self.add_point(point)
-            if prev_point:
+            if prev_point and point.time != prev_point.time:
                 current_speed_ms = (length_from_prev / (point.time - prev_point.time).seconds)
-            log.debug("Added point at time: {}, current total distance: {:.2f} m, from previous: {:.2f} m, current speed {:.2f} km/h{}"
+            log.debug("Added point at time: {}, current total distance: {:.1f} m, from previous: {:.1f} m, current speed {:.2f} km/h{}"
                 .format(point.time, total_distance, length_from_prev, current_speed_ms*3.6, hr_info))
             if duplicated_point:
                 log.debug(">> Added duplicated (stop) point at time {}".format(duplicated_point.time))
@@ -341,7 +378,7 @@ class StravaGpxTool:
 
         # validations and variables settings
         if not pace and not hr:
-            raise StravaGpxException("ERROR: Nothing th set (no HR or pace specified in program parameters)")
+            raise StravaGpxException("ERROR: Nothing to set (no HR or pace specified in program parameters)")
         if pace:
             if not self._opts.get('start_time') or not self._opts.get('end_time'):
                 raise StravaGpxException("\"start-time\" and \"end-time\" arguments must be set for filling the pace.")
@@ -412,14 +449,19 @@ class StravaGpxTool:
         # get indicies of points in correction file
         def get_fix_indexes(distance):
             dst_point = StravaGpxTool.get_point_at_distance(in_points, distance)
+            log.debug('Found the split point at time: {}'.format(dst_point.time))
             return (
                 StravaGpxTool.get_closest_point_index(in_points, dst_point),
                 StravaGpxTool.get_closest_point_index(correction_points, dst_point)
             )
         in_start_index, fix_start_index = get_fix_indexes(start_distance)
+        log.debug('Split points start index - from input file {} (at time: {})'
+            .format(in_start_index, in_points[in_start_index].time))
         in_end_index, fix_end_index = get_fix_indexes(end_distance)
+        log.debug('Split points end indexes - from input file {} (at time: {})'
+            .format(in_end_index, in_points[in_end_index].time))
         fill_time_boundaries = PointsBoundaries(
-            StravaGpxTool.get_time_at_index(in_points, in_start_index),
+            StravaGpxTool.get_time_at_index(in_points, in_start_index-1), # last inserted point
             StravaGpxTool.get_time_at_index(in_points, in_end_index))
         # correction in corrected indexes to smooth the path - use the next points
         fix_start_index += 1
@@ -428,12 +470,12 @@ class StravaGpxTool:
         # add point from input file from begining to the first fixed point
         metrics = self.add_points(in_points, crop_index=PointsBoundaries(None, in_start_index))
         log.info('Part before fix to distance {} m: added {} points with distance {:.0f} m.'.format(start_distance, metrics[0], metrics[1]))
-        metrics = self.add_points(correction_points, hr=0, hr_points=in_points,
-            pace=pace, fill_time=fill_time_boundaries,
+        metrics = self.add_points(correction_points, hr=None, hr_points=in_points,
+            pace=pace, fill_time=fill_time_boundaries, end_next_point=in_points[in_end_index],
             crop_index=PointsBoundaries(fix_start_index, fix_end_index))
         log.info('Fixed part: added {} points with distance {:.0f} m to the time between {} and {}'.format(metrics[0], metrics[1], fill_time_boundaries.start, fill_time_boundaries.end))
         metrics = self.add_points(in_points, crop_index=PointsBoundaries(in_end_index, None))
-        log.info('Part after fix from time {}: added {} points with distance {:.0f} m.'.format(end_distance, metrics[0], metrics[1]))
+        log.info('Part after fix from distance {}: added {} points with distance {:.0f} m.'.format(end_distance, metrics[0], metrics[1]))
 
 def main():
     """Main program entrypoint"""
