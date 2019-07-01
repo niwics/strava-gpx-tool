@@ -140,18 +140,19 @@ class StravaGpxTool:
         return points[index].time
     
     @staticmethod
-    def get_closest_point_index(points, point_to_find):
+    def get_closest_point_index(points, point_to_find, search_from_end=False):
         assert points, 'Points must be non-empty'
         best_index = 0
         best_distance = sys.maxsize
         i = 0
-        for point in points:
+        points_to_iterate = reversed(points) if search_from_end else points
+        for point in points_to_iterate:
             distance_to = geo.length_3d((point_to_find, point))
             if distance_to < best_distance:
                 best_distance = distance_to
                 best_index = i
             i += 1
-        return best_index
+        return len(points)-1-best_index if search_from_end else best_index
 
     def __init__(self, opts):
         """Class constructor.
@@ -461,17 +462,17 @@ class StravaGpxTool:
         correction_points = StravaGpxTool.get_points_from_file(self._opts['correction-file'])
 
         # get indicies of points in correction file
-        def get_fix_indexes(distance):
+        def get_fix_indexes(distance, search_from_end=False):
             dst_point = StravaGpxTool.get_point_at_distance(in_points, distance)
             log.debug('Found the split point at time: {}'.format(dst_point.time))
             return (
                 StravaGpxTool.get_closest_point_index(in_points, dst_point),
-                StravaGpxTool.get_closest_point_index(correction_points, dst_point)
+                StravaGpxTool.get_closest_point_index(correction_points, dst_point, search_from_end)
             )
         in_start_index, fix_start_index = get_fix_indexes(start_distance)
         log.debug('Split points start index - from input file {} (at time: {})'
             .format(in_start_index, in_points[in_start_index].time))
-        in_end_index, fix_end_index = get_fix_indexes(end_distance)
+        in_end_index, fix_end_index = get_fix_indexes(end_distance, True)
         log.debug('Split points end indexes - from input file {} (at time: {})'
             .format(in_end_index, in_points[in_end_index].time))
         fill_time_boundaries = PointsBoundaries(
