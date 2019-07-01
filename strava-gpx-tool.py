@@ -224,6 +224,9 @@ class StravaGpxTool:
         cropped_points = points[crop_index.start:crop_index.end] if crop_index else points
         if end_next_point:
             cropped_points.append(deepcopy(end_next_point))
+        dense_points = cropped_points
+        if pace:
+            dense_points = self.dense_points(cropped_points, prev_point, next_point)
 
         if pace:
             assert fill_time, 'When setting the pace, both start and end dates must be set'
@@ -249,16 +252,12 @@ class StravaGpxTool:
 
         # compute variables based on overall distance
         if pace:
-            total_length = StravaGpxTool.compute_path_length(cropped_points)
+            total_length = StravaGpxTool.compute_path_length(dense_points)
             moving_time = total_length / speed_mps
-            # reserve 20% for the pause at the end (because of little innaccuracies created by un-smoothing the path - see MAX_POINT_DISTANCE)
-            pause_time = int((duration_total - moving_time) * 0.8)
+            # reserve 10% for the pause at the end (because of little innaccuracies created by un-smoothing the path - see MAX_POINT_DISTANCE)
+            pause_time = int((duration_total - moving_time) * 0.9)
             log.info("Filling the pace: moving time: {:.0f} seconds, pause time: {:.0f} seconds, speed: {:.2f} m/s (= {:.2f} km/h = pace {}), distance: {:.0f} m"
                 .format(moving_time, pause_time, speed_mps, speed_mps*3.6, pace, total_length))
-        
-        dense_points = cropped_points
-        if pace:
-            dense_points = self.dense_points(cropped_points, prev_point, next_point)
 
         log.debug("Started at time: {}".format(pace_last_time))
         for point in dense_points:
