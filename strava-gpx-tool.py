@@ -184,15 +184,17 @@ class StravaGpxTool:
         for point in original_points:
             if prev_point:
                 length_from_prev = geo.length_3d((prev_point, point))
+            log.debug('Processing point: {}, length from previous: {}'.format(point, length_from_prev))
             if length_from_prev > MAX_POINT_DISTANCE:
-                log.debug(length_from_prev)
                 num_points_to_add = int(length_from_prev/MAX_POINT_DISTANCE)
                 lat_step_distance = (point.latitude - prev_point.latitude)/(num_points_to_add+1)
                 lon_step_distance = (point.longitude - prev_point.longitude)/(num_points_to_add+1)
+                log.debug('Will add {} points'.format(num_points_to_add))
                 for i in range(num_points_to_add):
                     new_point = deepcopy(point)
                     new_point.latitude = prev_point.latitude + (i+1)*lat_step_distance
                     new_point.longitude = prev_point.longitude + (i+1)*lon_step_distance
+                    log.debug('New point to add: {}'.format(new_point))
                     points.append(new_point)
             points.append(point)
             prev_point = point
@@ -306,8 +308,12 @@ class StravaGpxTool:
             
             total_distance += length_from_prev
             self.add_point(point)
-            if prev_point and point.time != prev_point.time:
-                current_speed_ms = (length_from_prev / (point.time - prev_point.time).seconds)
+            if prev_point:
+                if point.time == prev_point.time:
+                    log.warn('Point time ({}) has not changed since the previous point (and it is not duplicated stop point)! Length from previous: {}m'
+                        .format(point.time, length_from_prev))
+                else:
+                    current_speed_ms = (length_from_prev / (point.time - prev_point.time).seconds)
             log.debug("Added point at time: {}, current total distance: {:.1f} m, from previous: {:.1f} m, current speed {:.2f} km/h{}"
                 .format(point.time, total_distance, length_from_prev, current_speed_ms*3.6, hr_info))
             if duplicated_point:
