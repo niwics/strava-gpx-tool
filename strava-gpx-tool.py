@@ -181,23 +181,31 @@ class StravaGpxTool:
     def dense_points(self, original_points, prev_point_param, next_point):
         points = []
         prev_point = prev_point_param
-        for point in original_points:
-            if prev_point:
-                length_from_prev = geo.length_3d((prev_point, point))
-            log.debug('Processing point: {}, length from previous: {}'.format(point, length_from_prev))
+
+        def add_points_on_path(from_point, to_point):
+            if from_point:
+                length_from_prev = geo.length_3d((from_point, to_point))
+            log.debug('Processing point: {}, length from previous: {}'.format(to_point, length_from_prev))
             if length_from_prev > MAX_POINT_DISTANCE:
                 num_points_to_add = int(length_from_prev/MAX_POINT_DISTANCE)
-                lat_step_distance = (point.latitude - prev_point.latitude)/(num_points_to_add+1)
-                lon_step_distance = (point.longitude - prev_point.longitude)/(num_points_to_add+1)
+                lat_step_distance = (to_point.latitude - from_point.latitude)/(num_points_to_add+1)
+                lon_step_distance = (to_point.longitude - from_point.longitude)/(num_points_to_add+1)
                 log.debug('Will add {} points'.format(num_points_to_add))
                 for i in range(num_points_to_add):
-                    new_point = deepcopy(point)
-                    new_point.latitude = prev_point.latitude + (i+1)*lat_step_distance
-                    new_point.longitude = prev_point.longitude + (i+1)*lon_step_distance
+                    new_point = deepcopy(to_point)
+                    new_point.latitude = from_point.latitude + (i+1)*lat_step_distance
+                    new_point.longitude = from_point.longitude + (i+1)*lon_step_distance
                     log.debug('New point to add: {}'.format(new_point))
                     points.append(new_point)
+    
+        for point in original_points:
+            add_points_on_path(prev_point, point)
             points.append(point)
             prev_point = point
+        # add points towards the next
+        if next_point:
+            add_points_on_path(prev_point, next_point)
+
         return points
     
     def add_points(self, points, hr = None, hr_points = None, pace = None,
@@ -479,7 +487,8 @@ class StravaGpxTool:
         log.info('Part before fix to distance {} m: added {} points with distance {:.0f} m.'.format(start_distance, metrics[0], metrics[1]))
         metrics = self.add_points(correction_points, hr=None, hr_points=in_points,
             pace=pace, fill_time=fill_time_boundaries, end_next_point=in_points[in_end_index],
-            crop_index=PointsBoundaries(fix_start_index, fix_end_index))
+            crop_index=PointsBoundaries(fix_start_index, fix_end_index),
+            next_point=in_points[in_end_index])
         log.info('Fixed part: added {} points with distance {:.0f} m to the time between {} and {}'.format(metrics[0], metrics[1], fill_time_boundaries.start, fill_time_boundaries.end))
         metrics = self.add_points(in_points, crop_index=PointsBoundaries(in_end_index, None))
         log.info('Part after fix from distance {}: added {} points with distance {:.0f} m.'.format(end_distance, metrics[0], metrics[1]))
