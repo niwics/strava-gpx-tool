@@ -243,7 +243,8 @@ class StravaGpxTool:
         if pace:
             total_length = StravaGpxTool.compute_path_length(cropped_points)
             moving_time = total_length / speed_mps
-            pause_time = duration_total - moving_time
+            # reserve 20% for the pause at the end (because of little innaccuracies created by un-smoothing the path - see MAX_POINT_DISTANCE)
+            pause_time = int((duration_total - moving_time) * 0.8)
             log.info("Filling the pace: moving time: {:.0f} seconds, pause time: {:.0f} seconds, speed: {:.2f} m/s (= {:.2f} km/h = pace {}), distance: {:.0f} m"
                 .format(moving_time, pause_time, speed_mps, speed_mps*3.6, pace, total_length))
         
