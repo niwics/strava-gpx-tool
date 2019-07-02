@@ -224,7 +224,9 @@ class StravaGpxTool:
             log.debug('Cropping points to indexes: {}'.format(crop_index))
         cropped_points = points[crop_index.start:crop_index.end] if crop_index else points
         if end_next_point:
-            cropped_points.append(deepcopy(end_next_point))
+            end_point = deepcopy(end_next_point)
+            end_point.extensions = [] # clear the HR because of its possible filling
+            cropped_points.append(end_point)
         dense_points = cropped_points
         if pace:
             dense_points = self.dense_points(cropped_points, prev_point, next_point)
