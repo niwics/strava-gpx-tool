@@ -183,6 +183,7 @@ class StravaGpxTool:
         prev_point = prev_point_param
 
         def add_points_on_path(from_point, to_point):
+            length_from_prev = 0
             if from_point:
                 length_from_prev = geo.length_3d((from_point, to_point))
             log.debug('Processing point: {}, length from previous: {}'.format(to_point, length_from_prev))
