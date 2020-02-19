@@ -457,8 +457,8 @@ class StravaGpxTool:
     
     def fix(self):
 
-        start_distance = int(1000*(self._opts['start-distance']))# km => m
-        end_distance = int(1000*(self._opts['end-distance']))    # km => m
+        start_distance = int(self._opts['start-distance']) # meters
+        end_distance = int(self._opts['end-distance'])  # meters
         pace = StravaGpxTool.parse_pace(self._opts.get('pace'))
 
         # read input files
