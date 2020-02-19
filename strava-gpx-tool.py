@@ -311,7 +311,7 @@ class StravaGpxTool:
                 extension_element = ElementTree.Element(HR_BASE_TAG)
                 extension_element.text = ""
                 hr_element = ElementTree.Element(HR_TAG)
-                hr_value = str(self.get_hr_for_time(point.time, hr))
+                hr_value = str(self.get_hr_for_time(point.time) or hr)
                 hr_element.text = hr_value
                 extension_element.append(hr_element)
                 point.extensions.append(extension_element)
@@ -339,19 +339,19 @@ class StravaGpxTool:
         
         return (out_points_counter, total_distance)
     
-    def get_hr_for_time(self, search_time, default_hr):
+    def get_hr_for_time(self, search_time):
         """Get HR value (from HR file) corresponding to the given time.
         """
-        hr = default_hr
-        if len(self._time_hr_array) and self._time_hr_search_offset < len(self._time_hr_array):
-            if search_time < self._time_hr_array[self._time_hr_search_offset][0]:
-                return default_hr
-            while search_time >= self._time_hr_array[self._time_hr_search_offset][0]:
-                if self._time_hr_search_offset == len(self._time_hr_array):
+        offset = self._time_hr_search_offset
+        if len(self._time_hr_array) and offset < len(self._time_hr_array):
+            if search_time < self._time_hr_array[offset][0]:
+                return self._time_hr_array[offset][1]
+            while search_time >= self._time_hr_array[offset][0]:
+                if offset == len(self._time_hr_array):
                     raise StravaGpxException("No corresponding datetime found in HR file.")
-                hr = self._time_hr_array[self._time_hr_search_offset][1]
                 self._time_hr_search_offset += 1
-        return hr
+                return self._time_hr_array[offset][1]
+        return None
     
     def process(self):
         """Processes the action based on selected mode.
