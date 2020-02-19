@@ -489,11 +489,13 @@ class StravaGpxTool:
         # add point from input file from begining to the first fixed point
         metrics = self.add_points(in_points, crop_index=PointsBoundaries(None, in_start_index))
         log.info('Part before fix to distance {} m: added {} points with distance {:.0f} m.'.format(start_distance, metrics[0], metrics[1]))
+        # add correction (fix) points from correction file
         metrics = self.add_points(correction_points, hr=None, hr_points=in_points,
             pace=pace, fill_time=fill_time_boundaries, end_next_point=in_points[in_end_index],
             crop_index=PointsBoundaries(fix_start_index, fix_end_index),
             next_point=in_points[in_end_index])
         log.info('Fixed part: added {} points with distance {:.0f} m to the time between {} and {}'.format(metrics[0], metrics[1], fill_time_boundaries.start, fill_time_boundaries.end))
+        # add points from input file from the last fixed point to the end
         metrics = self.add_points(in_points, crop_index=PointsBoundaries(in_end_index, None))
         log.info('Part after fix from distance {}: added {} points with distance {:.0f} m.'.format(end_distance, metrics[0], metrics[1]))
 
