@@ -257,6 +257,9 @@ class StravaGpxTool:
         if pace:
             total_length = StravaGpxTool.compute_path_length(dense_points)
             moving_time = total_length / speed_mps
+            if duration_total < moving_time:
+                raise StravaGpxException('Moving time ({}s) computed from the pace ({}) is smaller than time window of fixed activity ({}s). You should set faster pace.'
+                    .format(moving_time, pace, duration_total))
             # reserve 10% for the pause at the end (because of little innaccuracies created by un-smoothing the path - see MAX_POINT_DISTANCE)
             pause_time = int((duration_total - moving_time) * 0.9)
             log.info("Filling the pace: moving time: {:.0f} seconds, pause time: {:.0f} seconds, speed: {:.2f} m/s (= {:.2f} km/h = pace {}), distance: {:.0f} m"
