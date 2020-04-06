@@ -53,6 +53,12 @@ Example of merging two files `input-dir/1.gpx` and `input-dir/second.gpx`:
 python strava-gpx-tool.py merge input-dir
 ```
 
+### Fixing the cluttered GPS
+
+```bash
+python strava-gpx-tool.py fix lisen.gpx lisen-fix.gpx 1030 13500 3:59
+```
+
 ## About
 
 Author: Mira Kvasnica, GPX processing is based on [gpxpy library](https://github.com/tkrajina/gpxpy).
