@@ -1,3 +1,5 @@
+#!/usr/bin/python
+
 # @author: niwics, niwi.cz, September 2018
 
 import logging
